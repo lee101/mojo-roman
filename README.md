@@ -73,15 +73,18 @@ Linux 6.8.0-136-generic, and Python 3.13.14:
 
 | case | mojo-roman | upstream roman 5.2 | speedup |
 | --- | ---: | ---: | ---: |
-| `toRoman` scalar loop (100k) | 29.92 ms | 127.94 ms | 4.28x |
-| `fromRoman` scalar loop (100k) | 37.83 ms | 318.47 ms | 8.42x |
-| `toRomanBatch` (1M) | 164.74 ms | 1224.68 ms | 7.43x |
-| `fromRomanBatch` (1M) | 823.03 ms | 3997.97 ms | 4.86x |
+| `toRoman` scalar loop (100k) | 27.60 ms | 120.41 ms | 4.36x |
+| `fromRoman` scalar loop (100k) | 38.16 ms | 298.89 ms | 7.83x |
+| `toRomanBatch` (1M) | 124.56 ms | 1277.70 ms | 10.26x |
+| `fromRomanBatch` (1M) | 94.63 ms | 3052.72 ms | 32.26x |
 
 These are the best of three repetitions from an actual `pixi run bench` run.
 The task takes a machine-wide lock before measuring. Scalar results include
 bounded cache hits; batch results execute one native call per batch. The
-library has no GPU path or GPU dependency.
+conversion kernels are branch-heavy operations on strings of at most 15 bytes
+with no floating-point arithmetic, so they do not approach the roughly two
+flops-per-byte threshold needed to justify device transfer and launch costs.
+The library therefore has no GPU path. MAX is used only for CPU parallelism.
 
 ## How it works
 
@@ -100,6 +103,11 @@ directly into a contiguous NumPy array. Mojo allocates no heap memory, and no
 buffer outlives the call. Each export validates non-null addresses, lengths,
 capacities, counts, value ranges, and offset ordering before accessing memory;
 Python keeps every backing object alive for the duration of the `ctypes` call.
+
+Bulk parsing builds its packed ASCII buffer in one encode and computes offsets
+with NumPy. Mojo validates offsets and scans parse results with SIMD, including
+scalar remainder loops for non-multiple lengths. Batches below 65,536 items stay
+serial; larger batches are split into independent 8,192-item CPU tasks.
 
 ## Development
 

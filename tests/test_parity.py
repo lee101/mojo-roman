@@ -234,6 +234,39 @@ def test_batch_from_roman_reports_bad_index():
         roman.fromRomanBatch(["I", "II", "IIV", "IV"])
 
 
+def test_batch_from_roman_simd_tail():
+    np.testing.assert_array_equal(
+        roman.fromRomanBatch(["I", "II", "III", "IV", "V"]),
+        np.arange(1, 6, dtype=np.int64),
+    )
+
+
+@pytest.mark.parametrize("count", [65_535, 65_536])
+def test_batch_from_roman_parallel_threshold(count):
+    numerals = ["CMXLIV"] * count
+    np.testing.assert_array_equal(
+        roman.fromRomanBatch(numerals),
+        np.full(count, 944, dtype=np.int64),
+    )
+
+
+def test_batch_from_roman_parallel_reports_first_bad_index():
+    numerals = ["I"] * 65_536
+    numerals[8_193] = "IIV"
+    numerals[40_000] = "VX"
+    with pytest.raises(
+        roman.InvalidRomanNumeralError,
+        match=r"index 8193: IIV",
+    ):
+        roman.fromRomanBatch(numerals)
+
+
+@pytest.mark.parametrize("item", [1, "Ⅳ"])
+def test_batch_from_roman_rejects_non_ascii_strings_and_nonstrings(item):
+    with pytest.raises(roman.InvalidRomanNumeralError, match=r"index 1"):
+        roman.fromRomanBatch(["I", item, "V"])
+
+
 def test_batch_from_roman_empty():
     result = roman.fromRomanBatch([])
     assert result.dtype == np.int64

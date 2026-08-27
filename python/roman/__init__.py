@@ -174,24 +174,32 @@ def fromRomanBatch(
     if not items:
         return np.empty(0, dtype=np.int64)
 
-    encoded_items: list[bytes] = []
-    for index, item in enumerate(items):
-        if not item:
-            raise InvalidRomanNumeralError(
-                f"Invalid Roman numeral at index {index}: {item}"
-            )
-        try:
-            encoded_items.append(item.encode("ascii"))
-        except (AttributeError, UnicodeEncodeError):
-            raise InvalidRomanNumeralError(
-                f"Invalid Roman numeral at index {index}: {item}"
-            ) from None
+    try:
+        lengths = np.fromiter(map(len, items), dtype=np.int64, count=len(items))
+        packed = "".join(items).encode("ascii")
+    except (TypeError, UnicodeEncodeError):
+        for index, item in enumerate(items):
+            if not isinstance(item, str):
+                raise InvalidRomanNumeralError(
+                    f"Invalid Roman numeral at index {index}: {item}"
+                ) from None
+            try:
+                item.encode("ascii")
+            except UnicodeEncodeError:
+                raise InvalidRomanNumeralError(
+                    f"Invalid Roman numeral at index {index}: {item}"
+                ) from None
+        raise RuntimeError("failed to pack validated Roman numerals")
+    empty = np.flatnonzero(lengths == 0)
+    if empty.size:
+        index = int(empty[0])
+        raise InvalidRomanNumeralError(
+            f"Invalid Roman numeral at index {index}: {items[index]}"
+        )
 
-    offsets = np.empty(len(items) + 1, dtype=np.int64)
+    offsets = np.empty(lengths.size + 1, dtype=np.int64)
     offsets[0] = 0
-    for index, encoded in enumerate(encoded_items, start=1):
-        offsets[index] = offsets[index - 1] + len(encoded)
-    packed = b"".join(encoded_items)
+    np.cumsum(lengths, out=offsets[1:])
     result = np.empty(len(items), dtype=np.int64)
     failed = lib().mr_from_roman_batch(
         bytes_addr(packed),

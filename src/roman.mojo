@@ -1,7 +1,13 @@
 """Roman numeral conversion kernels and their C ABI."""
 
+from max.algorithm import parallelize
+from std.sys.info import num_physical_cores, simd_width_of as simdwidthof
+
+
 comptime BPtr = UnsafePointer[UInt8, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int64, AnyOrigin[mut=True]]
+comptime PARALLEL_PARSE_THRESHOLD = 65536
+comptime PARSE_CHUNK_SIZE = 8192
 
 
 def write_repeated(dst: BPtr, pos: Int, value: UInt8, count: Int) -> Int:
@@ -145,6 +151,64 @@ def from_roman(src: BPtr, n: Int, special_case: Bool) -> Int:
     return result
 
 
+def offsets_are_valid(offsets: IPtr, count: Int, data_length: Int) -> Bool:
+    if offsets[0] != 0 or Int(offsets[count]) != data_length:
+        return False
+    comptime W = simdwidthof[DType.float64]()
+    var i = 0
+    var vector_end = count - count % W
+    while i < vector_end:
+        var starts = offsets.load[width=W, alignment=1](i)
+        var ends = offsets.load[width=W, alignment=1](i + 1)
+        var invalid = ends.le(starts)
+        if invalid.cast[DType.int64]().reduce_add() != 0:
+            return False
+        i += W
+    while i < count:
+        if offsets[i + 1] <= offsets[i]:
+            return False
+        i += 1
+    return True
+
+
+def parse_batch_range(
+    data: BPtr,
+    offsets: IPtr,
+    dst: IPtr,
+    start: Int,
+    end: Int,
+    special_case: Bool,
+):
+    for i in range(start, end):
+        var item_start = Int(offsets[i])
+        var item_end = Int(offsets[i + 1])
+        dst[i] = Int64(
+            from_roman(
+                data + item_start,
+                item_end - item_start,
+                special_case,
+            )
+        )
+
+
+def first_parse_failure(dst: IPtr, count: Int) -> Int:
+    comptime W = simdwidthof[DType.float64]()
+    var i = 0
+    var vector_end = count - count % W
+    while i < vector_end:
+        var invalid = dst.load[width=W, alignment=1](i).lt(Int64(0))
+        if invalid.cast[DType.int64]().reduce_add() != 0:
+            for lane in range(W):
+                if dst[i + lane] < 0:
+                    return i + lane + 1
+        i += W
+    while i < count:
+        if dst[i] < 0:
+            return i + 1
+        i += 1
+    return 0
+
+
 @export("mr_to_roman")
 def mr_to_roman(n: Int, dst_addr: Int, dst_capacity: Int) abi("C") -> Int:
     if n < 0 or n >= 5000 or dst_addr <= 0 or dst_capacity < 15:
@@ -220,19 +284,30 @@ def mr_from_roman_batch(
     var data = BPtr(unsafe_from_address=data_addr)
     var offsets = IPtr(unsafe_from_address=offsets_addr)
     var dst = IPtr(unsafe_from_address=dst_addr)
-    if offsets[0] != 0 or Int(offsets[count]) != data_length:
+    if not offsets_are_valid(offsets, count, data_length):
         return -1
-    for i in range(count):
-        var start = Int(offsets[i])
-        var end = Int(offsets[i + 1])
-        if start < 0 or end <= start or end > data_length:
-            return -1
-        var value = from_roman(
-            data + start,
-            end - start,
-            special_case != 0,
+    var use_special_case = special_case != 0
+    if count >= PARALLEL_PARSE_THRESHOLD:
+        var chunks = (count + PARSE_CHUNK_SIZE - 1) // PARSE_CHUNK_SIZE
+
+        @parameter
+        def parse_chunk(chunk: Int):
+            var start = chunk * PARSE_CHUNK_SIZE
+            var end = min(start + PARSE_CHUNK_SIZE, count)
+            parse_batch_range(
+                BPtr(unsafe_from_address=data_addr),
+                IPtr(unsafe_from_address=offsets_addr),
+                IPtr(unsafe_from_address=dst_addr),
+                start,
+                end,
+                use_special_case,
+            )
+
+        parallelize[parse_chunk](
+            chunks, min(chunks, num_physical_cores())
         )
-        if value < 0:
-            return i + 1
-        dst[i] = Int64(value)
-    return 0
+    else:
+        parse_batch_range(
+            data, offsets, dst, 0, count, use_special_case
+        )
+    return first_parse_failure(dst, count)
