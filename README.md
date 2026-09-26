@@ -84,7 +84,8 @@ bounded cache hits; batch results execute one native call per batch. The
 conversion kernels are branch-heavy operations on strings of at most 15 bytes
 with no floating-point arithmetic, so they do not approach the roughly two
 flops-per-byte threshold needed to justify device transfer and launch costs.
-The library therefore has no GPU path. MAX is used only for CPU parallelism.
+The library therefore has no GPU path, and the batch parse is chunked but
+single-threaded.
 
 ## How it works
 

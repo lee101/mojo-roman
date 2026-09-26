@@ -1,6 +1,5 @@
 """Roman numeral conversion kernels and their C ABI."""
 
-from max.algorithm import parallelize
 from std.sys.info import num_physical_cores, simd_width_of as simdwidthof
 
 
@@ -290,22 +289,10 @@ def mr_from_roman_batch(
     if count >= PARALLEL_PARSE_THRESHOLD:
         var chunks = (count + PARSE_CHUNK_SIZE - 1) // PARSE_CHUNK_SIZE
 
-        @parameter
-        def parse_chunk(chunk: Int):
+        for chunk in range(chunks):
             var start = chunk * PARSE_CHUNK_SIZE
             var end = min(start + PARSE_CHUNK_SIZE, count)
-            parse_batch_range(
-                BPtr(unsafe_from_address=data_addr),
-                IPtr(unsafe_from_address=offsets_addr),
-                IPtr(unsafe_from_address=dst_addr),
-                start,
-                end,
-                use_special_case,
-            )
-
-        parallelize[parse_chunk](
-            chunks, min(chunks, num_physical_cores())
-        )
+            parse_batch_range(data, offsets, dst, start, end, use_special_case)
     else:
         parse_batch_range(
             data, offsets, dst, 0, count, use_special_case
