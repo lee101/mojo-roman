@@ -157,8 +157,8 @@ def offsets_are_valid(offsets: IPtr, count: Int, data_length: Int) -> Bool:
     var i = 0
     var vector_end = count - count % W
     while i < vector_end:
-        var starts = offsets.load[width=W, alignment=1](i)
-        var ends = offsets.load[width=W, alignment=1](i + 1)
+        var starts = offsets.unsafe_load[width=W, alignment=1](i)
+        var ends = offsets.unsafe_load[width=W, alignment=1](i + 1)
         var invalid = ends.le(starts)
         if invalid.cast[DType.int64]().reduce_add() != 0:
             return False
@@ -195,7 +195,7 @@ def first_parse_failure(dst: IPtr, count: Int) -> Int:
     var i = 0
     var vector_end = count - count % W
     while i < vector_end:
-        var invalid = dst.load[width=W, alignment=1](i).lt(Int64(0))
+        var invalid = dst.unsafe_load[width=W, alignment=1](i).lt(Int64(0))
         if invalid.cast[DType.int64]().reduce_add() != 0:
             for lane in range(W):
                 if dst[i + lane] < 0:
